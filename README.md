@@ -4,12 +4,9 @@ AI PDF Reader is a modern, full-stack application that lets you upload a PDF, an
 
 The goal of this project is to be **product-ready**: clean architecture, premium UI, and a solid base to turn into a SaaS or a sellable template.
 
-<img width="1585" height="959" alt="Captura de pantalla 2025-11-24 211035" src="https://github.com/user-attachments/assets/ed20e462-9a49-4ef9-8f88-db1253e8c15e" />
+<img width="1875" height="910" alt="Captura de pantalla 2025-12-11 213252" src="https://github.com/user-attachments/assets/fd4b6769-0cc8-4e82-87b2-105f07f8bfc1" />
 
 
-
-
-<img width="1594" height="941" alt="Captura de pantalla 2025-11-24 211053" src="https://github.com/user-attachments/assets/a04bd8ab-74b7-4fcd-987d-78648ed6363b" />
 
 ---
 
