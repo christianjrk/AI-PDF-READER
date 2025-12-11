@@ -1,166 +1,166 @@
+// backend/src/server.js
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import pdfParse from "pdf-parse";
+import pdf from "pdf-parse";
+import fetch from "node-fetch";
 import dotenv from "dotenv";
-import Groq from "groq-sdk";
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5001;
-const FRONTEND_ORIGIN =
-  process.env.FRONTEND_ORIGIN || "http://localhost:5173";
+const PORT = 5001;
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
-});
-
-// Middleware
-app.use(
-  cors({
-    origin: FRONTEND_ORIGIN,
-    credentials: true,
-  })
-);
+app.use(cors());
 app.use(express.json());
 
-// Multer config (PDF stored in memory)
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
-});
+// =========================
+// 🔹 VARIABLES GLOBALES
+// =========================
+let pdfText = "";
+let lastAnswer = "";
 
-// PDF cache (v1)
-let currentPdfText = "";
-let currentPdfName = "";
+// =========================
+// 🔹 MULTER CONFIG
+// =========================
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
 
-/* ============================================================
-   HEALTHCHECK
-============================================================ */
-app.get("/api/health", (req, res) => {
-  res.json({
-    status: "ok",
-    pdfLoaded: !!currentPdfText,
-    pdfName: currentPdfName || null,
-  });
-});
+// =========================
+// 🔹 SUBIR PDF /api/upload
+// =========================
+app.post("/api/upload", upload.single("pdf"), async (req, res) => {
+  console.log("📄 Subiendo PDF...");
 
-/* ============================================================
-   1️⃣ UPLOAD PDF
-============================================================ */
-app.post("/api/upload", upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
-      return res
-        .status(400)
-        .json({ error: "A PDF file must be provided." });
+      console.log("❌ No file provided");
+      return res.json({ ok: false, error: "NO_FILE" });
     }
 
-    const { originalname, buffer } = req.file;
+    const data = await pdf(req.file.buffer);
 
-    // Extract text from PDF
-    const data = await pdfParse(buffer);
-    const text = data.text || "";
+    pdfText = data.text || "";
+    console.log("📚 Longitud PDF:", pdfText.length);
 
-    if (!text.trim()) {
-      return res.status(400).json({
-        error:
-          "No readable text was found in this PDF. It may be scanned or empty.",
-      });
-    }
+    const preview = pdfText.slice(0, 1500);
 
-    currentPdfText = text;
-    currentPdfName = originalname;
-
-    res.json({
-      success: true,
-      fileName: originalname,
-      pages: data.numpages,
-      textLength: text.length,
-      message: "PDF uploaded and processed successfully.",
+    return res.json({
+      ok: true,
+      pdf: {
+        filename: req.file.originalname,
+        pages: data.numpages,
+        characters: pdfText.length,
+      },
+      preview,
     });
-  } catch (error) {
-    console.error("Error processing PDF:", error);
-    res.status(500).json({
-      error: "Server error while processing the PDF.",
+  } catch (err) {
+    console.error("🔥 ERROR en /api/upload:", err);
+    return res.json({
+      ok: false,
+      error: "UPLOAD_FAIL",
+      message: err.message,
     });
   }
 });
 
-/* ============================================================
-   2️⃣ ASK THE AI
-============================================================ */
+// =========================
+// 🔹 ASK AI /api/ask
+// =========================
 app.post("/api/ask", async (req, res) => {
+  console.log("📩 /api/ask recibió una petición");
+
   try {
-    const { question } = req.body;
+    const { question, mode } = req.body;
+    console.log("➡️ Pregunta:", question);
+    console.log("➡️ Modo:", mode);
 
-    if (!question || !question.trim()) {
-      return res.status(400).json({ error: "The question cannot be empty." });
-    }
-
-    if (!currentPdfText) {
-      return res.status(400).json({
-        error: "No PDF uploaded yet. Please upload a PDF first.",
+    if (!pdfText) {
+      console.log("❌ No PDF cargado");
+      return res.json({
+        ok: false,
+        error: "NO_PDF",
+        message: "Upload a PDF first.",
       });
     }
 
-    // Limit the text chunk sent to the AI
-    const MAX_CHARS = 12000;
-    const pdfSnippet =
-      currentPdfText.length > MAX_CHARS
-        ? currentPdfText.slice(0, MAX_CHARS)
-        : currentPdfText;
+    console.log("📚 Longitud PDF:", pdfText.length);
 
-    // FINAL CLEAN PROMPT (PURE ENGLISH + PERFECT LANGUAGE RULE)
-    const userPrompt = `
-You are an AI assistant that answers questions about a PDF document.
+    // Prompt inteligente con soporte EN+ES
+    const systemPrompt = `
+You are an expert multilingual PDF assistant.
+Your rules:
+- Detect automatically if the user is writing in English or Spanish.
+- Respond ALWAYS in the same language the user uses.
+- If the question is unclear, ask for clarification.
+- Base your response ONLY on this PDF content:
 
-Here is the PDF content (may be truncated):
-"""
-${pdfSnippet}
-"""
+${pdfText.slice(0, 4000)}
+`;
 
-The user's question is:
-"${question}"
+    console.log("🧠 Enviando solicitud a Groq...");
 
-CRITICAL RULES:
-- ALWAYS answer in the SAME LANGUAGE the user used in their question.
-- DO NOT infer language from the PDF. Only detect language from the user question.
-- If the PDF does not contain the answer, clearly say so.
-- Be clear, accurate, and concise.
-    `.trim();
-
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are an AI assistant specialized in analyzing PDF documents and answering questions in the user's language.",
-        },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.2,
-      max_tokens: 800,
+    const groqRes = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: "llama-3.1-8b-instant",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: question },
+        ],
+        temperature: 0.3,
+      }),
     });
 
-    const answer =
-      completion.choices?.[0]?.message?.content?.trim() ||
-      "No answer generated.";
+    console.log("📥 Status Groq:", groqRes.status);
 
-    res.json({ success: true, answer });
-  } catch (error) {
-    console.error("Error in /api/ask:", error);
-    res
-      .status(500)
-      .json({ error: "Error generating the response using Groq." });
+    const groqData = await groqRes.json();
+    console.log("📦 Respuesta completa Groq:", groqData);
+
+    if (!groqData.choices || !groqData.choices[0]?.message?.content) {
+      console.log("❌ Groq devolvió una respuesta inválida");
+      return res.json({
+        ok: false,
+        error: "INVALID_RESPONSE",
+        details: groqData,
+      });
+    }
+
+    const answer = groqData.choices[0].message.content;
+    lastAnswer = answer;
+
+    console.log("✅ Respuesta generada correctamente");
+
+    return res.json({ ok: true, answer });
+  } catch (err) {
+    console.error("🔥 ERROR en /api/ask:", err);
+    return res.json({
+      ok: false,
+      error: "SERVER_FAIL",
+      message: err.message,
+      stack: err.stack,
+    });
   }
 });
 
-/* ============================================================
-   START SERVER
-============================================================ */
+// =========================
+// 🔹 Descargar última respuesta
+// =========================
+app.get("/api/last-answer", (req, res) => {
+  if (!lastAnswer) {
+    return res.json({ ok: false, message: "No answer yet." });
+  }
+
+  return res.json({ ok: true, answer: lastAnswer });
+});
+
+// =========================
+// 🔹 Arrancar servidor
+// =========================
 app.listen(PORT, () => {
-  console.log(`🚀 AI PDF Reader backend running at http://localhost:${PORT}`);
+  console.log(`🚀 AI PDF Reader backend running on http://localhost:${PORT}`);
 });

@@ -1,418 +1,469 @@
-import { useEffect, useState } from "react";
+// frontend/src/App.jsx
+import { useState, useEffect, useRef } from "react";
+import "./App.css";
+
+const API_BASE = "/api";
+
+// Detectar idioma + instrucciones especiales
+function detectLanguage(question) {
+  const q = question.toLowerCase();
+
+  if (q.includes("en español") || q.includes("al español") || q.includes("tradúcelo al español")) {
+    return "spanish";
+  }
+  if (q.includes("in english") || q.includes("to english") || q.includes("respond in english")) {
+    return "english";
+  }
+
+  const spanishRegex = /[áéíóúñ¿¡]/;
+  const englishKeywords = /\b(the|and|what|why|how|explain|summarize|summary)\b/;
+
+  if (spanishRegex.test(q)) return "spanish";
+  if (englishKeywords.test(q)) return "english";
+
+  return "auto";
+}
 
 function App() {
-  const [pdfName, setPdfName] = useState("");
-  const [pdfPages, setPdfPages] = useState(null);
-  const [pdfChars, setPdfChars] = useState(null);
+  const [theme, setTheme] = useState("dark");
+
+  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfMeta, setPdfMeta] = useState(null);
+  const [pdfPreview, setPdfPreview] = useState("");
+
+  const [status, setStatus] = useState("Idle");
   const [isUploading, setIsUploading] = useState(false);
-  const [isPdfReady, setIsPdfReady] = useState(false);
-  const [question, setQuestion] = useState("");
-  const [messages, setMessages] = useState([]);
   const [isAsking, setIsAsking] = useState(false);
-  const [error, setError] = useState("");
-  const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
 
-  // Clean preview URL on unmount / change
+  const [messages, setMessages] = useState([]);
+  const [question, setQuestion] = useState("");
+
+  const chatEndRef = useRef(null);
+
+  // Scroll suave al final del chat
   useEffect(() => {
-    return () => {
-      if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
-    };
-  }, [pdfPreviewUrl]);
+    if (chatEndRef.current) {
+      chatEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [messages]);
 
-  const processPdfFile = async (file) => {
+  // ==============================
+  // THEME
+  // ==============================
+  const handleThemeToggle = () => {
+    setTheme((prev) => (prev === "dark" ? "light" : "dark"));
+  };
+
+  const isDark = theme === "dark";
+
+  // ==============================
+  // MANEJO DEL PDF
+  // ==============================
+  const handleFileChange = (e) => {
+    const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.type !== "application/pdf") {
-      setError("Only PDF files are allowed.");
+    resetPdfState();
+    setPdfFile(file);
+    setStatus("PDF selected. Click “Analyze PDF”.");
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (!file) return;
+
+    if (!file.type.includes("pdf")) {
+      alert("Please upload a PDF file.");
       return;
     }
 
-    // Create preview URL
-    if (pdfPreviewUrl) URL.revokeObjectURL(pdfPreviewUrl);
-    const url = URL.createObjectURL(file);
-    setPdfPreviewUrl(url);
+    resetPdfState();
+    setPdfFile(file);
+    setStatus("PDF selected. Click “Analyze PDF”.");
+  };
 
-    setError("");
-    setIsUploading(true);
-    setIsPdfReady(false);
+  const handleDragOver = (e) => e.preventDefault();
+
+  const resetPdfState = () => {
+    setPdfMeta(null);
+    setPdfPreview("");
+    setMessages([]);
+  };
+
+  const uploadPdf = async () => {
+    if (!pdfFile) {
+      alert("Select a PDF first.");
+      return;
+    }
 
     try {
-      const formData = new FormData();
-      formData.append("file", file);
+      setIsUploading(true);
+      setStatus("Uploading & analyzing PDF...");
 
-      const res = await fetch("/api/upload", {
+      const formData = new FormData();
+      formData.append("pdf", pdfFile);
+
+      const res = await fetch(`${API_BASE}/upload`, {
         method: "POST",
         body: formData,
       });
 
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.error || "Error uploading PDF.");
+      if (!data.ok) {
+        console.error("Upload error:", data);
+        alert("Error processing PDF.");
+        setStatus("Error processing PDF.");
+        return;
       }
 
-      setPdfName(data.fileName);
-      setPdfPages(data.pages);
-      setPdfChars(data.textLength);
-      setIsPdfReady(true);
-
+      setPdfMeta(data.pdf);
+      setPdfPreview(data.preview || "");
       setMessages([
         {
           role: "system",
-          content: `✅ PDF "${data.fileName}" loaded. Pages: ${data.pages}. Text length: ${data.textLength} characters.`,
+          content: `✅ PDF "${data.pdf.filename}" loaded. Pages: ${data.pdf.pages}. Characters: ${data.pdf.characters}.`,
         },
       ]);
+      setStatus("PDF analyzed. Ready to ask questions.");
     } catch (err) {
       console.error(err);
-      setError(err.message || "Error uploading PDF.");
+      alert("Upload failed.");
+      setStatus("Upload failed.");
     } finally {
       setIsUploading(false);
     }
   };
 
-  const handleFileInputChange = (event) => {
-    const file = event.target.files?.[0];
-    processPdfFile(file);
-  };
-
-  const handleDrop = (event) => {
-    event.preventDefault();
-    setIsDragging(false);
-    const file = event.dataTransfer.files?.[0];
-    processPdfFile(file);
-  };
-
-  const handleDragOver = (event) => {
-    event.preventDefault();
-    setIsDragging(true);
-  };
-
-  const handleDragLeave = (event) => {
-    event.preventDefault();
-    setIsDragging(false);
-  };
-
-  const ask = async (rawQuestion) => {
-    const trimmed = rawQuestion.trim();
-    if (!trimmed) return;
-    if (!isPdfReady) {
-      setError("Please upload a PDF first.");
+  // ==============================
+  // ENVIAR PREGUNTA A LA IA
+  // ==============================
+  const sendQuestion = async (mode = "chat", overrideQuestion) => {
+    if (!pdfMeta) {
+      alert("Upload and analyze a PDF first.");
       return;
     }
 
-    setError("");
-    setIsAsking(true);
-    setMessages((prev) => [...prev, { role: "user", content: trimmed }]);
+    let rawQuestion = overrideQuestion ?? question.trim();
+    if (!rawQuestion) {
+      if (mode === "chat") return;
+      // quick action sin texto explícito
+      if (mode === "summary") rawQuestion = "Give me a clear structured summary of this PDF.";
+      else if (mode === "key_insights") rawQuestion = "Give me the key insights of this PDF.";
+      else if (mode === "explain_like_10") rawQuestion = "Explain the main ideas of this PDF like I am 10 years old.";
+      else if (mode === "action_items") rawQuestion = "Extract actionable items and next steps from this PDF.";
+    }
+
+    const lang = detectLanguage(rawQuestion);
+    let finalQuestion = rawQuestion;
+
+    if (lang === "english") {
+      finalQuestion = `${rawQuestion}\n\nIMPORTANT: Answer strictly in English.`;
+    } else if (lang === "spanish") {
+      finalQuestion = `${rawQuestion}\n\nIMPORTANTE: Responde estrictamente en español.`;
+    }
+
+    // Mensaje de usuario visible en el chat
+    let visibleUserText = rawQuestion;
+    if (mode !== "chat" && !overrideQuestion) {
+      const labelMap = {
+        summary: "Summarize this PDF.",
+        key_insights: "Give me key insights from this PDF.",
+        explain_like_10: "Explain this PDF like I'm 10.",
+        action_items: "Extract action items from this PDF.",
+      };
+      visibleUserText = labelMap[mode] || rawQuestion;
+    }
+
+    setMessages((prev) => [...prev, { role: "user", content: visibleUserText }]);
     setQuestion("");
+    setIsAsking(true);
+    setStatus("Asking the AI...");
 
     try {
-      const res = await fetch("/api/ask", {
+      const res = await fetch(`${API_BASE}/ask`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ question: trimmed }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          question: finalQuestion,
+          mode,
+          language: lang, // si el backend lo usa, bien; si no, lo ignora
+        }),
       });
 
       const data = await res.json();
 
-      if (!res.ok) {
-        throw new Error(data.error || "Error processing the request.");
+      if (!data.ok) {
+        console.error("Ask error:", data);
+        alert("Error asking the AI.");
+        setStatus("Error asking the AI.");
+        return;
       }
 
-      const answer = data.answer || "No answer received.";
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.answer },
+      ]);
 
-      setMessages((prev) => [...prev, { role: "assistant", content: answer }]);
+      setStatus("Ready.");
     } catch (err) {
       console.error(err);
-      setError(err.message || "Error contacting the AI.");
+      alert("AI request failed.");
+      setStatus("AI request failed.");
     } finally {
       setIsAsking(false);
     }
   };
 
-  const handleAskSubmit = (e) => {
-    e.preventDefault();
-    ask(question);
+  const handleQuickAction = (mode) => {
+    sendQuestion(mode, ""); // la función ya se encarga de generar el texto
   };
 
-  const handleQuickAsk = (template) => {
-    ask(template);
+  // ENTER para enviar
+  const handleInputKeyDown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      if (!isAsking && question.trim()) {
+        sendQuestion("chat");
+      }
+    }
   };
 
-  const handleClearChat = () => {
+  const clearChat = () => {
     setMessages([]);
-    setError("");
+    setStatus("Chat cleared.");
   };
 
-  const pdfLoaded = Boolean(pdfName);
-
+  // ==============================
+  // RENDER
+  // ==============================
   return (
-    <div className="app">
-      <div className="app-shell shell-animate">
-        {/* HEADER */}
-        <header className="app-header">
-          <div className="header-left">
-            <h1>AI PDF Reader</h1>
-            <p className="subtitle">
-              Upload · Analyze · Ask anything · Groq-powered
-            </p>
+    <div className={`app-root theme-${theme}`}>
+      {/* TOP BAR */}
+      <header className="top-bar">
+        <div className="brand">
+          <div className="brand-icon">AI</div>
+          <div className="brand-text">
+            <div className="brand-title">PDF Reader PRO · IAROT</div>
+            <div className="brand-subtitle">
+              Upload · Analyze · Ask anything · Groq-powered · EN/ES Smart
+            </div>
           </div>
-          <div className="header-right">
-            <div className="header-chip">v1 · Prototype</div>
-            <div className="header-chip secondary">Built by you</div>
-          </div>
-        </header>
+        </div>
 
-        {/* TOP STATUS BAR */}
-        <section className="status-bar">
-          <div className="status-item">
-            <span className="status-label">Current PDF</span>
-            <span className="status-value">
-              {pdfLoaded ? pdfName : "No PDF loaded"}
-            </span>
+        <div className="top-actions">
+          <button className="ghost-button" type="button" onClick={clearChat}>
+            Clear chat
+          </button>
+
+          <button
+            className={`theme-toggle ${isDark ? "on" : "off"}`}
+            type="button"
+            onClick={handleThemeToggle}
+            title="Toggle light/dark"
+          >
+            <span className="theme-dot" />
+          </button>
+        </div>
+      </header>
+
+      {/* STATUS BAR */}
+      <div className="status-bar">
+        <span className="status-dot" />
+        <span className="status-text">{status}</span>
+
+        {pdfMeta && (
+          <div className="status-meta">
+            <span>{pdfMeta.filename}</span>
+            <span>• {pdfMeta.pages} pages</span>
+            <span>• {pdfMeta.characters} chars</span>
           </div>
-          <div className="status-item">
-            <span className="status-label">Pages</span>
-            <span className="status-value">
-              {pdfLoaded && pdfPages != null ? pdfPages : "—"}
-            </span>
+        )}
+      </div>
+
+      {/* MAIN LAYOUT */}
+      <main className="layout">
+        {/* LEFT PANEL: PDF */}
+        <section className="panel panel-left">
+          <div className="panel-header">
+            <h2>Document</h2>
+            <span className="panel-tag">Max 20MB · PDF only</span>
           </div>
-          <div className="status-item">
-            <span className="status-label">Characters</span>
-            <span className="status-value">
-              {pdfLoaded && pdfChars != null ? pdfChars : "—"}
-            </span>
+
+          <div
+            className="drop-area"
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+          >
+            <div className="drop-icon">📄</div>
+            <div className="drop-title">Drag &amp; drop your PDF here</div>
+            <div className="drop-subtitle">
+              Or select it manually and let IAROT analyze the content.
+            </div>
+
+            <label className="file-button">
+              <input
+                type="file"
+                accept="application/pdf"
+                hidden
+                onChange={handleFileChange}
+              />
+              <span>{pdfFile ? "Change PDF" : "Select PDF"}</span>
+            </label>
           </div>
-          <div className="status-item">
-            <span className="status-label">State</span>
-            <span className={`status-dot ${isPdfReady ? "on" : "off"}`}>
-              {isPdfReady ? "Ready" : "Idle"}
-            </span>
+
+          <button
+            className="primary-button full-width"
+            type="button"
+            onClick={uploadPdf}
+            disabled={isUploading || !pdfFile}
+          >
+            {isUploading ? "Analyzing PDF..." : "Analyze PDF"}
+          </button>
+
+          {/* QUICK ACTIONS */}
+          <div className="panel-section">
+            <div className="section-header">
+              <h3>Quick actions</h3>
+              <button
+                className="link-button"
+                type="button"
+                onClick={clearChat}
+              >
+                Clear chat
+              </button>
+            </div>
+
+            <div className="quick-actions">
+              <button
+                className="chip-button"
+                type="button"
+                onClick={() => handleQuickAction("summary")}
+                disabled={!pdfMeta || isAsking}
+              >
+                📝 Summary
+              </button>
+              <button
+                className="chip-button"
+                type="button"
+                onClick={() => handleQuickAction("key_insights")}
+                disabled={!pdfMeta || isAsking}
+              >
+                💡 Key insights
+              </button>
+              <button
+                className="chip-button"
+                type="button"
+                onClick={() => handleQuickAction("explain_like_10")}
+                disabled={!pdfMeta || isAsking}
+              >
+                🤓 Explain like I'm 10
+              </button>
+              <button
+                className="chip-button"
+                type="button"
+                onClick={() => handleQuickAction("action_items")}
+                disabled={!pdfMeta || isAsking}
+              >
+                ✅ Action items
+              </button>
+            </div>
+          </div>
+
+          {/* PREVIEW */}
+          <div className="panel-section">
+            <div className="section-header">
+              <h3>PDF preview</h3>
+              {pdfMeta && (
+                <span className="section-meta">
+                  {pdfMeta.pages} pages · {pdfMeta.characters} characters
+                </span>
+              )}
+            </div>
+
+            <div className="preview-box">
+              {pdfPreview ? (
+                <pre>{pdfPreview}</pre>
+              ) : (
+                <div className="preview-placeholder">
+                  The first lines of your PDF will appear here after analysis.
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
-        {/* MAIN LAYOUT */}
-        <main className="app-main">
-          {/* LEFT PANEL: UPLOAD + PREVIEW */}
-          <section className="panel panel-animate">
-            <h2 className="panel-title">1. Upload & preview PDF</h2>
-            <p className="panel-text">
-              Drag & drop a PDF file or select it manually. Then ask natural
-              language questions about its content.
-            </p>
+        {/* RIGHT PANEL: CHAT */}
+        <section className="panel panel-right">
+          <div className="panel-header">
+            <h2>Chat with your PDF</h2>
+            <span className="panel-tag">Ask in English or Spanish</span>
+          </div>
 
-            <div
-              className={`drop-zone ${
-                isDragging ? "drop-zone--dragging" : ""
-              }`}
-              onDragOver={handleDragOver}
-              onDragLeave={handleDragLeave}
-              onDrop={handleDrop}
-            >
-              <p className="drop-zone-title">
-                {isUploading ? "Processing PDF..." : "Drag & drop your PDF here"}
-              </p>
-              <p className="drop-zone-sub">
-                or{" "}
-                <label className="file-upload-inline">
-                  <input
-                    type="file"
-                    accept="application/pdf"
-                    onChange={handleFileInputChange}
-                    disabled={isUploading}
-                  />
-                  <span>Select PDF</span>
-                </label>
-              </p>
-            </div>
-
-            <div className="pdf-status">
-              {pdfLoaded ? (
-                <>
-                  <p className="pdf-name">
-                    Loaded: <strong>{pdfName}</strong>
-                  </p>
-                  {isPdfReady ? (
-                    <span className="status-pill ready">Ready to ask</span>
-                  ) : (
-                    <span className="status-pill pending">Processing…</span>
-                  )}
-                </>
-              ) : (
-                <p className="pdf-name pdf-name--empty">
-                  No PDF uploaded yet.
+          <div className="chat-box">
+            {messages.length === 0 && (
+              <div className="chat-placeholder">
+                <p>Ask anything about your document.</p>
+                <p className="chat-example">
+                  Examples:
+                  <br />
+                  • What is this PDF about? (English)
+                  <br />
+                  • Resúmeme este PDF en español.
+                  <br />
+                  • Explica los conceptos clave y respóndeme en inglés.
+                  <br />
+                  • Tradúceme al español las conclusiones.
                 </p>
-              )}
-            </div>
-
-            {error && <div className="error-box">{error}</div>}
-
-            {/* QUICK ACTIONS */}
-            <div className="quick-actions">
-              <div className="quick-actions-header">
-                <span>Quick actions</span>
-                <button
-                  type="button"
-                  className="quick-clear"
-                  onClick={handleClearChat}
-                  disabled={!messages.length}
-                >
-                  Clear chat
-                </button>
               </div>
-              <div className="quick-actions-buttons">
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleQuickAsk(
-                      "Summarize this PDF in 5 short bullet points."
-                    )
-                  }
-                  disabled={!isPdfReady || isAsking}
-                >
-                  Summarize PDF
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleQuickAsk(
-                      "List the 10 most important insights from this PDF."
-                    )
-                  }
-                  disabled={!isPdfReady || isAsking}
-                >
-                  Key insights
-                </button>
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleQuickAsk(
-                      "Explain the main idea of this PDF as if I were 10 years old."
-                    )
-                  }
-                  disabled={!isPdfReady || isAsking}
-                >
-                  Explain like I&apos;m 10
-                </button>
-              </div>
-            </div>
+            )}
 
-            {/* PDF PREVIEW */}
-            <div className="preview-card">
-              <div className="preview-header">
-                <p className="preview-title">PDF preview</p>
-                {pdfLoaded && (
-                  <span className="preview-meta">
-                    {pdfPages != null ? `${pdfPages} pages · ` : ""}
-                    {pdfChars != null ? `${pdfChars} chars` : ""}
-                  </span>
-                )}
-              </div>
-              {pdfPreviewUrl ? (
-                <iframe
-                  src={pdfPreviewUrl}
-                  title="PDF preview"
-                  className="pdf-preview-frame"
-                />
-              ) : (
-                <p className="preview-placeholder">
-                  Upload a PDF to see a live preview here.
-                </p>
-              )}
-            </div>
-
-            {/* TIPS */}
-            <div className="tips">
-              <p className="tips-title">Tips</p>
-              <ul>
-                <li>Use PDFs with selectable text (not scanned images).</li>
-                <li>
-                  Ask focused questions, e.g.{" "}
-                  <em>"What are the main clauses of this contract?"</em>
-                </li>
-                <li>
-                  This is v1 — you can extend it later with history, auth,
-                  database, etc.
-                </li>
-              </ul>
-            </div>
-          </section>
-
-          {/* RIGHT PANEL: CHAT */}
-          <section className="panel panel-animate panel-delay">
-            <h2 className="panel-title">2. Ask the AI</h2>
-
-            <div className="chat-window">
-              {messages.length === 0 ? (
-                <div className="empty-chat">
-                  <p>Upload a PDF and ask your first question.</p>
-                  <p className="empty-chat-sub">
-                    Example:{" "}
-                    <em>"What is this document about in simple terms?"</em>
-                  </p>
-                </div>
-              ) : (
-                <div className="messages">
-                  {messages.map((msg, index) => (
-                    <div
-                      key={index}
-                      className={`message message-${msg.role}`}
-                    >
-                      <div className="message-role">
-                        {msg.role === "user"
-                          ? "You"
-                          : msg.role === "assistant"
-                          ? "AI"
-                          : "System"}
-                      </div>
-                      <div className="message-content">{msg.content}</div>
-                    </div>
-                  ))}
-                  {isAsking && (
-                    <div className="message message-assistant">
-                      <div className="message-role">AI</div>
-                      <div className="message-content">
-                        <div className="typing-indicator">
-                          <span></span>
-                          <span></span>
-                          <span></span>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <form className="chat-input-row" onSubmit={handleAskSubmit}>
-              <input
-                type="text"
-                placeholder={
-                  isPdfReady
-                    ? "Ask something about the PDF..."
-                    : "Upload a PDF first."
-                }
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                disabled={!isPdfReady || isAsking}
-              />
-              <button
-                type="submit"
-                disabled={!isPdfReady || isAsking || !question.trim()}
+            {messages.map((msg, index) => (
+              <div
+                key={index}
+                className={`chat-message chat-${msg.role}`}
               >
-                {isAsking ? "Sending…" : "Ask"}
-              </button>
-            </form>
-          </section>
-        </main>
+                <div className="chat-role">
+                  {msg.role === "user"
+                    ? "You"
+                    : msg.role === "assistant"
+                    ? "AI"
+                    : "System"}
+                </div>
+                <div className="chat-bubble">{msg.content}</div>
+              </div>
+            ))}
 
-        <footer className="app-footer">
-          <span>Built with Groq · React · Node</span>
-          <span className="footer-right">Base for a premium product / SaaS.</span>
-        </footer>
-      </div>
+            <div ref={chatEndRef} />
+          </div>
+
+          <div className="chat-input-area">
+            <textarea
+              className="chat-input"
+              placeholder="Ask something about this PDF..."
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={handleInputKeyDown}
+              rows={3}
+            />
+
+            <button
+              className="primary-button"
+              type="button"
+              onClick={() => sendQuestion("chat")}
+              disabled={isAsking || !question.trim()}
+            >
+              {isAsking ? "Thinking..." : "Send"}
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <footer className="app-footer">
+        <div>Built with Groq · React · Node</div>
+        <div>IAROT · Base for a premium product / SaaS</div>
+      </footer>
     </div>
   );
 }
