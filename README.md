@@ -10,8 +10,6 @@ The goal of this project is to be **product-ready**: clean architecture, premium
 
 ![pdffoto1](https://github.com/user-attachments/assets/42e2d9c6-bce2-4fcb-bd09-6045e8748334)
 
-![pdf3](https://github.com/user-attachments/assets/6ce145b7-353a-4265-86e0-350beb11a519)
-
 
 ---
 
