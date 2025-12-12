@@ -6,11 +6,11 @@ The goal of this project is to be **product-ready**: clean architecture, premium
 
 <img width="1882" height="905" alt="Captura de pantalla 2025-12-11 213601" src="https://github.com/user-attachments/assets/56016cb5-383a-452e-9b28-41fd8eb21256" />
 
-![pdffoto1](https://github.com/user-attachments/assets/73389db5-d3bf-4dc7-96c8-f57d8e0b052b)
+![pdf0](https://github.com/user-attachments/assets/9dbdc8df-fce6-4de2-b26f-91e4d6943581)
 
-![pdf2](https://github.com/user-attachments/assets/537f01c3-b131-4483-9350-7c923e66468d)
+![pdffoto1](https://github.com/user-attachments/assets/42e2d9c6-bce2-4fcb-bd09-6045e8748334)
 
-![pdf3](https://github.com/user-attachments/assets/ac55a8ff-5c90-4863-9d84-42b77e9a20f9)
+![pdf3](https://github.com/user-attachments/assets/6ce145b7-353a-4265-86e0-350beb11a519)
 
 
 ---
